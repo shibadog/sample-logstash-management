@@ -24,3 +24,16 @@ compose.ymlを実行し、 `test01-pipeline.conf` を KibanaからLogstash Manag
 ```
 2024-06-07 12:30:31 [2024-06-07T03:30:31,106][INFO ][logstash.agent           ] Pipelines running {:count=>29, :running_pipelines=>[:".monitoring-logstash", :test01, :test02, :test03, :test04, :test05, :test06, :test07, :test08, :test09, :test10, :test11, :test12, :test13, :test14, :test15, :test16, :test17, :test18, :test19, :test20, :test21, :test22, :test23, :test24, :test26, :test27, :test28, :test29], :non_running_pipelines=>[]}
 ```
+
+## 参考
+
+### 各種エンドポイント
+
+* [Kibana](http://localhost:5601)
+  * `elastic/elastic`
+* [Elasticsearch](https://localhost:9200)
+  * `elastic/elastic`
+* [H2 Database](http://localhost:8082)
+  * `Generic H2 (Server)`
+  * `jdbc:h2:tcp://localhost//opt/h2/data/testdb`
+  * `sa/`
