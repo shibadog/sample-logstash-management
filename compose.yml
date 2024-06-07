@@ -1,0 +1,269 @@
+version: '3'
+
+services:
+
+  # @see https://www.elastic.co/guide/en/elasticsearch/reference/8.6/docker.html
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: setup
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - password:/work
+      - jdbcdriver:/jdbcdriver
+    user: "0"
+    command: >
+      bash -c '
+        if [ x${ELASTIC_PASSWORD} == x ]; then
+          echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
+          exit 1;
+        elif [ x${KIBANA_PASSWORD} == x ]; then
+          echo "Set the KIBANA_PASSWORD environment variable in the .env file";
+          exit 1;
+        elif [ x${LOGSTASH_PASSWORD} == x ]; then
+          echo "Set the LOGSTASH_PASSWORD environment variable in the .env file";
+          exit 1;
+        fi;
+        echo ${ELASTIC_PASSWORD} > /work/bootstrapPassword.txt
+        chmod 600 /work/bootstrapPassword.txt
+        if [ ! -f config/certs/ca.zip ]; then
+          echo "Creating CA";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/certs.zip ]; then
+          echo "Creating certs";
+          echo -ne \
+          "instances:\n"\
+          "  - name: es01\n"\
+          "    dns:\n"\
+          "      - es01\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          > config/certs/instances.yml;
+          bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+          unzip config/certs/certs.zip -d config/certs;
+        fi;
+        echo "Setting file permissions"
+        chown -R root:root config/certs;
+        find . -type d -exec chmod 750 \{\} \;;
+        find . -type f -exec chmod 640 \{\} \;;
+        echo "Waiting for Elasticsearch availability";
+        until curl -s --cacert config/certs/ca/ca.crt https://es01:9200 | grep -q "missing authentication credentials"; do sleep 30; done;
+        echo "Setting kibana_system password";
+        until curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        echo "Setting logstash_system password";
+        until curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es01:9200/_security/user/logstash_system/_password -d "{\"password\":\"${LOGSTASH_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        echo "Setting fleet server";
+        until curl -sf -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "kbn-xsrf: true" http://kibana:5601/api/fleet/setup; do sleep 10; done;
+        until curl -sf -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "kbn-xsrf: true" http://kibana:5601/api/fleet/agents/setup; do sleep 10; done;
+        echo -e "\nfleet output";
+        curl -sf -X PUT  -u "elastic:${ELASTIC_PASSWORD}" -H "kbn-xsrf: true" -H "Content-Type: application/json" http://kibana:5601/api/fleet/outputs/fleet-default-output -d "{\"name\": \"default\",\"type\": \"elasticsearch\",\"is_default\": true,\"is_default_monitoring\": true,\"hosts\": [ \"https://es01:9200\" ],\"ca_sha256\": \"\",\"config_yaml\": \"ssl.verification_mode: none\"}";
+        echo -e "\nfleet policy";
+        curl -sf -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "kbn-xsrf: true" -H "Content-Type: application/json" http://kibana:5601/api/fleet/agent_policies -d "{\"id\": \"fleet-server-policy\",\"name\": \"Fleet Server policy 1\",\"description\": \"\",\"namespace\": \"default\",\"monitoring_enabled\": [\"logs\",\"metrics\"],\"is_default_fleet_server\": true}";
+        echo -e "\nfleet package policy";
+        curl -sf -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "kbn-xsrf: true" -H "Content-Type: application/json" http://kibana:5601/api/fleet/package_policies -d "{\"policy_id\": \"fleet-server-policy\",\"package\": {\"name\": \"fleet_server\",\"version\": \"1.2.0\"},\"name\": \"fleet_server-1\",\"description\": \"\",\"namespace\": \"default\",\"inputs\": {\"fleet_server-fleet-server\": {\"enabled\": true,\"vars\": {\"host\": [\"0.0.0.0\"],\"port\": [8220],\"custom\": \"\"},\"streams\": {}}}}";
+        echo -e "\napm package policy";
+        curl -sf -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "kbn-xsrf: true" -H "Content-Type: application/json" http://kibana:5601/api/fleet/package_policies -d "{ \"id\": \"5ebd3a9d-4ebb-43f7-8b31-879fc1ab2d4e\", \"name\": \"apm-1\", \"namespace\": \"default\", \"description\": \"\", \"package\": { \"name\": \"apm\", \"version\": \"${STACK_VERSION}\" }, \"enabled\": true, \"policy_id\": \"fleet-server-policy\", \"inputs\": [ { \"type\": \"apm\", \"policy_template\": \"apmserver\", \"enabled\": true, \"streams\": [], \"vars\": { \"host\": { \"value\": \"0.0.0.0:8200\", \"type\": \"text\" }, \"url\": { \"value\": \"http://fleet-server:8200\", \"type\": \"text\" }, \"secret_token\": { \"type\": \"text\" }, \"api_key_enabled\": { \"value\": false, \"type\": \"bool\" }, \"enable_rum\": { \"value\": true, \"type\": \"bool\" }, \"anonymous_enabled\": { \"value\": true, \"type\": \"bool\" }, \"anonymous_allow_agent\": { \"value\": [ \"rum-js\", \"js-base\", \"iOS/swift\" ], \"type\": \"text\" }, \"anonymous_allow_service\": { \"value\": [], \"type\": \"text\" }, \"anonymous_rate_limit_event_limit\": { \"value\": 300, \"type\": \"integer\" }, \"anonymous_rate_limit_ip_limit\": { \"value\": 1000, \"type\": \"integer\" }, \"default_service_environment\": { \"type\": \"text\" }, \"rum_allow_origins\": { \"value\": [ \"\\\"*\\\"\" ], \"type\": \"text\" }, \"rum_allow_headers\": { \"value\": [], \"type\": \"text\" }, \"rum_response_headers\": { \"type\": \"yaml\" }, \"rum_library_pattern\": { \"value\": \"\\\"node_modules|bower_components|~\\\"\", \"type\": \"text\" }, \"rum_exclude_from_grouping\": { \"value\": \"\\\"^/webpack\\\"\", \"type\": \"text\" }, \"api_key_limit\": { \"value\": 100, \"type\": \"integer\" }, \"max_event_bytes\": { \"value\": 307200, \"type\": \"integer\" }, \"capture_personal_data\": { \"value\": true, \"type\": \"bool\" }, \"max_header_bytes\": { \"value\": 1048576, \"type\": \"integer\" }, \"idle_timeout\": { \"value\": \"45s\", \"type\": \"text\" }, \"read_timeout\": { \"value\": \"3600s\", \"type\": \"text\" }, \"shutdown_timeout\": { \"value\": \"30s\", \"type\": \"text\" }, \"write_timeout\": { \"value\": \"30s\", \"type\": \"text\" }, \"max_connections\": { \"value\": 0, \"type\": \"integer\" }, \"response_headers\": { \"type\": \"yaml\" }, \"expvar_enabled\": { \"value\": false, \"type\": \"bool\" }, \"pprof_enabled\": { \"value\": false, \"type\": \"bool\" }, \"java_attacher_discovery_rules\": { \"type\": \"yaml\" }, \"java_attacher_agent_version\": { \"type\": \"text\" }, \"java_attacher_enabled\": { \"value\": false, \"type\": \"bool\" }, \"tls_enabled\": { \"value\": false, \"type\": \"bool\" }, \"tls_certificate\": { \"type\": \"text\" }, \"tls_key\": { \"type\": \"text\" }, \"tls_supported_protocols\": { \"value\": [ \"TLSv1.1\", \"TLSv1.2\", \"TLSv1.3\" ], \"type\": \"text\" }, \"tls_cipher_suites\": { \"value\": [], \"type\": \"text\" }, \"tls_curve_types\": { \"value\": [], \"type\": \"text\" }, \"tail_sampling_policies\": { \"value\": \"- sample_rate: 0.1\\\\n\", \"type\": \"yaml\" }, \"tail_sampling_interval\": { \"value\": \"1m\", \"type\": \"text\" }, \"tail_sampling_enabled\": { \"value\": false, \"type\": \"bool\" }, \"tail_sampling_storage_limit\": { \"value\": \"3GB\", \"type\": \"text\" }, \"service_metrics_enabled\": { \"value\": false, \"type\": \"bool\" } }, \"config\": { \"apm-server\": { \"value\": { \"rum\": { \"source_mapping\": { \"metadata\": [] } }, \"agent_config\": [] } } } } ]}"
+        echo -e "\njdbc driver download oracle"
+        if [ -e /jdbcdriver/ojdbc11.jar ]; then
+            echo "file exists"
+        else
+            curl -Lo /jdbcdriver/ojdbc11.jar https://repo1.maven.org/maven2/com/oracle/database/jdbc/ojdbc11/21.6.0.0.1/ojdbc11-21.6.0.0.1.jar
+            echo "complete download"
+        fi
+        echo -e "\njdbc driver download h2"
+        if [ -e /jdbcdriver/h2-2.2.224.jar ]; then
+            echo "file exists"
+        else
+            curl -Lo /jdbcdriver/h2-2.2.224.jar https://search.maven.org/remotecontent?filepath=com/h2database/h2/2.2.224/h2-2.2.224.jar
+            echo "complete download"
+        fi
+        echo -e "\nAll done!";
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f config/certs/es01/es01.crt ]"]
+      interval: 1s
+      timeout: 5s
+      retries: 120
+
+  es01:
+    depends_on:
+      setup:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: elasticsearch
+    restart: always
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata01:/usr/share/elasticsearch/data
+      - password:/run/secrets
+    ports:
+      - ${ES_PORT}:9200
+    environment:
+      - node.name=es01
+      - cluster.name=${CLUSTER_NAME}
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ES_SETTING_BOOTSTRAP_MEMORY__LOCK=true
+      - ES_SETTING_XPACK_SECURITY_ENABLED=true
+      - ES_SETTING_XPACK_SECURITY_HTTP_SSL_ENABLED=true
+      - ES_SETTING_XPACK_SECURITY_HTTP_SSL_KEY=certs/es01/es01.key
+      - ES_SETTING_XPACK_SECURITY_HTTP_SSL_CERTIFICATE=certs/es01/es01.crt
+      - ES_SETTING_XPACK_SECURITY_HTTP_SSL_CERTIFICATE__AUTHORITIES=certs/ca/ca.crt
+      - ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_ENABLED=true
+      - ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_KEY=certs/es01/es01.key
+      - ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_CERTIFICATE=certs/es01/es01.crt
+      - ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_CERTIFICATE__AUTHORITIES=certs/ca/ca.crt
+      - ES_SETTING_XPACK_SECURITY_TRANSPORT_SSL_VERIFICATION__MODE=certificate
+      - ES_SETTING_XPACK_MONITORING_COLLECTION_ENABLED=true
+      - ES_SETTING_XPACK_LICENSE_SELF__GENERATED_TYPE=${LICENSE}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  kibana:
+    depends_on:
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    container_name: kibana
+    restart: always
+    volumes:
+      - certs:/usr/share/kibana/config/certs
+      - kibanadata:/usr/share/kibana/data
+    ports:
+      - ${KIBANA_PORT}:5601
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=https://es01:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
+    mem_limit: ${MEM_LIMIT}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -u elastic:${ELASTIC_PASSWORD} http://localhost:5601/api/fleet/package_policies | grep -q 'fleet_server'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  fleet-server:
+    depends_on:
+      kibana:
+        condition: service_healthy
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/beats/elastic-agent:${STACK_VERSION}
+    container_name: fleet-server
+    restart: always
+    user: root
+    environment:
+      FLEET_SERVER_ENABLE: 1
+      FLEET_ENROLL_USERNAME: elastic
+      FLEET_ENROLL_PASSWORD: ${ELASTIC_PASSWORD}
+      FLEET_TELEMETRY_ENABLED: "true" # 必要に応じて true/false を切り替えてください
+      FLEET_SERVER_ELASTICSEARCH_HOST: https://es01:9200
+      FLEET_SERVER_ELASTICSEARCH_CA: /usr/share/elastic-agent/config/certs/es01/es01.crt
+      ELASTICSEARCH_HOSTS: https://es01:9200
+      ELASTICSEARCH_USERNAME: elastic
+      ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD}
+      ELASTICSEARCH_CA: /usr/share/elastic-agent/config/certs/ca/ca.crt
+      LOG_LEVEL: warn
+    volumes:
+      - certs:/usr/share/elastic-agent/config/certs
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8220:8220"
+      - "8200:8200"
+    healthcheck:
+      test: "curl -kf https://localhost:8220/api/status | grep HEALTHY 2>&1 >/dev/null"
+      retries: 12
+      interval: 5s
+
+  logstash:
+    depends_on:
+      es01:
+        condition: service_healthy
+      # oracledb:
+      #   condition: service_healthy
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    container_name: logstash
+    restart: always
+    user: root
+    environment: #logstash_system
+      - xpack.management.enabled=true
+      - xpack.management.pipeline.id=["*"]
+      - xpack.management.elasticsearch.username="elastic"
+      - xpack.management.elasticsearch.password=${LOGSTASH_PASSWORD}
+      - xpack.management.elasticsearch.hosts=https://es01:9200
+      - xpack.management.elasticsearch.ssl.certificate_authority="/usr/share/logstash/certs/ca/ca.crt"
+      - xpack.management.logstash.poll_interval=5s
+      - xpack.monitoring.enabled=true
+      - xpack.monitoring.elasticsearch.hosts=https://es01:9200
+      - xpack.monitoring.elasticsearch.username="elastic"
+      - xpack.monitoring.elasticsearch.password=${LOGSTASH_PASSWORD}
+      - xpack.monitoring.elasticsearch.ssl.certificate_authority="/usr/share/logstash/certs/ca/ca.crt"
+    volumes:
+      - certs:/usr/share/logstash/certs
+      - jdbcdriver:/usr/share/logstash/jdbcdriver
+
+  h2-database:
+    image: alpine:latest
+    command:
+      - sh
+      - -c
+      - |
+        # JDKの準備
+        apk update
+        apk add --no-cache openjdk21
+        rm -rf /var/cache/apk/*
+        if [ -e h2-2023-09-17.zip ]; then
+          echo "file exists"
+        else
+          # H2のダウンロード
+          mkdir -p /opt
+          wget https://github.com/h2database/h2database/releases/download/version-2.2.224/h2-2023-09-17.zip
+          unzip h2-2023-09-17.zip
+          mv h2 /opt
+          mkdir -p /opt/h2/data
+        fi
+        # データベースファイルの作成
+        if [ ! -e /opt/h2/data/testdb.mv.db ]; then
+          echo "Creating database file"
+          echo "CREATE TABLE IF NOT EXISTS test (id INT PRIMARY KEY, name VARCHAR(255));" > /opt/h2/init.sql
+          java -cp /opt/h2/bin/h2-2.2.224.jar org.h2.tools.RunScript -url jdbc:h2:/opt/h2/data/testdb -script /opt/h2/init.sql -user sa
+        fi
+        # H2サーバの起動
+        java -cp /opt/h2/bin/h2-2.2.224.jar org.h2.tools.Server -tcp -tcpAllowOthers -web -webAllowOthers -pg -pgAllowOthers -baseDir /opt/h2/data
+    ports:
+      - 9092:9092
+      - 5435:5435
+      - 8082:8082
+
+volumes:
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  kibanadata:
+    driver: local
+  oradata:
+    driver: local
+  password:
+    driver: local
+  jdbcdriver:
+    driver: local
