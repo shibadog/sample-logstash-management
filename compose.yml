@@ -200,7 +200,7 @@ services:
         condition: service_healthy
       # oracledb:
       #   condition: service_healthy
-    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    image: docker.elastic.co/logstash/logstash:${LOGSTASH_VERSION}
     container_name: logstash
     restart: always
     user: root

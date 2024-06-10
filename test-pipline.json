@@ -1,0 +1,12 @@
+{
+    "description": "",
+    "pipeline": "input {\r\n  jdbc {\r\n    jdbc_driver_library => \"/usr/share/logstash/jdbcdriver/h2-2.2.224.jar\"\r\n    jdbc_driver_class => \"Java::org.h2.Driver\"\r\n    jdbc_connection_string => \"jdbc:h2:tcp://h2-database:9092//opt/h2/data/testdb\"\r\n    jdbc_user => \"sa\"\r\n    jdbc_password => \"\"\r\n    statement => \"\r\nselect * FROM test;\r\n\"\r\n    schedule => \"*/2 * * * *\"\r\n  }\r\n}\r\n\r\nfilter {\r\n}\r\n\r\noutput {\r\n  elasticsearch {\r\n    ssl => true\r\n    ssl_certificate_verification => false\r\n    hosts => [\"https://es01:9200\"]\r\n    user => \"elastic\"\r\n    password => \"elastic\"\r\n    doc_as_upsert => true\r\n    document_id => 'test'\r\n  }\r\n}",
+    "settings": {
+      "pipeline.batch.delay": 50,
+      "pipeline.batch.size": 125,
+      "pipeline.workers": 1,
+      "queue.checkpoint.writes": 1024,
+      "queue.max_bytes": "1gb",
+      "queue.type": "memory"
+    }
+  }
