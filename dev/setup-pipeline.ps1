@@ -1,17 +1,18 @@
 $ScriptDir = Split-Path $MyInvocation.MyCommand.Path
+$RootDir = "$ScriptDir/.."
 
-# env読み込み
-Get-Content "${ScriptDir}/../.env" | Select-String -Pattern "^[^#]" | %{ Set-Variable $_.toString().split("=")[0] $_.toString().split("=")[1] }
+# Load env
+Get-Content "${RootDir}/.env" | Select-String -Pattern "^[^#]" | %{ Set-Variable $_.toString().split("=")[0] $_.toString().split("=")[1] }
 
-# 30個パイプラインを作る
+# create 30 pipelines
 1..30 | ForEach-Object {
     "http://localhost:5601/api/logstash/pipeline/test{0:00}" -f $_
 } | ForEach-Object {
     Invoke-WebRequest -Uri $_ `
-        -Method PUT`
+        -Method PUT `
         -Headers @{
             "kbn-xsrf" = true;
             Authorization = "Basic "+ [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("elastic:${ELASTIC_PASSWORD}"))
         } `
-        -InFile "${ScriptDir}/../test-pipline.json"
+        -InFile "${RootDir}/test-pipline.json"
 }

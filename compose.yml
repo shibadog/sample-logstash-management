@@ -175,7 +175,7 @@ services:
       FLEET_SERVER_ENABLE: 1
       FLEET_ENROLL_USERNAME: elastic
       FLEET_ENROLL_PASSWORD: ${ELASTIC_PASSWORD}
-      FLEET_TELEMETRY_ENABLED: "true" # 必要に応じて true/false を切り替えてください
+      FLEET_TELEMETRY_ENABLED: "true"
       FLEET_SERVER_ELASTICSEARCH_HOST: https://es01:9200
       FLEET_SERVER_ELASTICSEARCH_CA: /usr/share/elastic-agent/config/certs/es01/es01.crt
       ELASTICSEARCH_HOSTS: https://es01:9200
@@ -227,27 +227,27 @@ services:
       - sh
       - -c
       - |
-        # JDKの準備
+        # setup JDK
         apk update
         apk add --no-cache openjdk21
         rm -rf /var/cache/apk/*
         if [ -e h2-2023-09-17.zip ]; then
           echo "file exists"
         else
-          # H2のダウンロード
+          # download h2 database
           mkdir -p /opt
           wget https://github.com/h2database/h2database/releases/download/version-2.2.224/h2-2023-09-17.zip
           unzip h2-2023-09-17.zip
           mv h2 /opt
           mkdir -p /opt/h2/data
         fi
-        # データベースファイルの作成
+        # create database file
         if [ ! -e /opt/h2/data/testdb.mv.db ]; then
           echo "Creating database file"
           echo "CREATE TABLE IF NOT EXISTS test (id INT PRIMARY KEY, name VARCHAR(255));" > /opt/h2/init.sql
           java -cp /opt/h2/bin/h2-2.2.224.jar org.h2.tools.RunScript -url jdbc:h2:/opt/h2/data/testdb -script /opt/h2/init.sql -user sa
         fi
-        # H2サーバの起動
+        # startup h2 database server
         java -cp /opt/h2/bin/h2-2.2.224.jar org.h2.tools.Server -tcp -tcpAllowOthers -web -webAllowOthers -pg -pgAllowOthers -baseDir /opt/h2/data
     ports:
       - 9092:9092
